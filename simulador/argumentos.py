@@ -13,4 +13,3 @@ def mezcla(texto):
     except ValueError:
         raise argparse.ArgumentTypeError('Usa favor=4,contra=0,neutral=0; cantidades de 0 a 50')
     return resultado
-
