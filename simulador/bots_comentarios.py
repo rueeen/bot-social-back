@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright
 from . import config
 from .ia import comentario_bot
+from .personas import PERSONAS
 
 class BotsComentarios:
     def __init__(self, hilo, corrida, cliente, lento=False, headless=False, azar=None):
@@ -12,7 +13,19 @@ class BotsComentarios:
         self.lento, self.headless = lento, headless
         self.azar = azar or random.Random()
 
+    def asignar_personas(self):
+        # Barajar una vez por corrida; el cupo conserva su estilo entre rondas.
+        catalogo = list(PERSONAS)
+        self.azar.shuffle(catalogo)
+        cantidad = sum(self.corrida.get('mezcla_bots', {}).values())
+        self.personas_por_cupo = [catalogo[i % len(catalogo)] for i in range(cantidad)]
+
+    @staticmethod
+    def nombre_bot(persona, numero):
+        return f'Bot_{persona["etiqueta"]}_{numero:02}'[:30]
+
     def __enter__(self):
+        self.asignar_personas()
         self.token = config.exigir('BOT_TOKEN')
         self.motor = sync_playwright().start()
         try:
@@ -36,6 +49,7 @@ class BotsComentarios:
     def cambiar_corrida(self, corrida):
         # El script de inicio no fija la corrida: no debe restaurar un ID antiguo al navegar.
         self.corrida = corrida
+        self.asignar_personas()
         self.pagina.evaluate('(id) => localStorage.setItem("corrida", String(id))', corrida['id'])
         self.pagina.goto(self.destino)
 
@@ -45,9 +59,10 @@ class BotsComentarios:
         for postura, cantidad in self.corrida['mezcla_bots'].items():
             for _ in range(cantidad):
                 numero += 1
-                texto = comentario_bot(postura, self.hilo['tema'], self.hilo['pregunta_postura'], previos, self.azar)
+                persona = self.personas_por_cupo[numero - 1]
+                texto = comentario_bot(postura, self.hilo['tema'], self.hilo['pregunta_postura'], previos, self.azar, persona=persona)
                 self.pagina.evaluate('(p) => localStorage.setItem("postura_bot", p)', postura)
-                self.pagina.locator(config.obtener('SELECTOR_NOMBRE', '[name="autor_nombre"]')).fill(f'AutoOpina_{numero:02}')
+                self.pagina.locator(config.obtener('SELECTOR_NOMBRE', '[name="autor_nombre"]')).fill(self.nombre_bot(persona, numero))
                 self.pagina.locator(config.obtener('SELECTOR_TEXTO', '[name="texto"]')).fill(texto)
                 ruta_api = urlsplit(config.API_URL).path.rstrip('/') + f'/hilos/{self.hilo["id"]}/comentarios/'
                 with self.pagina.expect_response(lambda r: r.request.method == 'POST' and urlsplit(r.url).path == ruta_api) as pendiente:

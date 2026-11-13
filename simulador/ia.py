@@ -36,9 +36,10 @@ def _limpiar_comentario(texto):
     return ' '.join(texto.split())
 
 
-def comentario_bot(postura, tema, pregunta, comentarios_previos, azar=None):
+def comentario_bot(postura, tema, pregunta, comentarios_previos, azar=None, persona=None):
     azar = azar or random.Random()
     if not config.obtener('ANTHROPIC_API_KEY'):
+        # Las plantillas y los respaldos no se personalizan por estilo.
         return azar.choice(PLANTILLAS[postura])
     sistema = (
         f'Eres un bot declarado de un foro educativo simulado. Tu postura asignada es {postura}. '
@@ -46,6 +47,10 @@ def comentario_bot(postura, tema, pregunta, comentarios_previos, azar=None):
         'en una sola línea, sin comillas ni viñetas, sin insultos, enlaces ni teléfonos. '
         'Neutral significa aportar matices o preguntas; favor y contra argumentan su lado.'
     )
+    if persona is not None:
+        sistema += (f' Estilo de argumentación: {persona["estilo"]} '
+                    'Es solo el estilo de un bot declarado, no una identidad humana. '
+                    'El estilo no cambia tu postura ni permite incumplir las reglas anteriores; mantén un tono civil.')
     datos = {'tema': tema, 'pregunta': pregunta, 'comentarios': comentarios_previos[-10:]}
     for _ in range(2):
         try:

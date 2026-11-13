@@ -2,7 +2,7 @@
 import math
 import random
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from .ia import PLANTILLAS, comentario_bot, nueva_postura
 
@@ -100,6 +100,112 @@ class PruebasIA(unittest.TestCase):
         with patch('simulador.ia._consultar') as consultar:
             self.assertEqual(nueva_postura(self.agente, 'Pregunta', [])['postura'], -20)
             consultar.assert_not_called()
+
+
+class PruebasPersonas(unittest.TestCase):
+    def setUp(self):
+        from .personas import PERSONAS
+        self.personas = PERSONAS
+
+    def test_catalogo_variado_con_etiquetas_cortas(self):
+        self.assertGreaterEqual(len(self.personas), 6)
+        self.assertEqual(len({p['etiqueta'] for p in self.personas}), len(self.personas))
+        self.assertTrue(all(0 < len(p['etiqueta']) <= 12 and p['estilo'] for p in self.personas))
+
+    def test_persona_en_prompt_conserva_reglas_y_robustez(self):
+        for persona in self.personas:
+            for respuesta in ['Una opinión breve.', '', 'palabra ' * 70]:
+                with self.subTest(persona=persona['etiqueta'], respuesta=respuesta[:20]), patch('simulador.config.obtener', return_value='clave-simulada'), patch('simulador.ia._consultar', return_value=respuesta) as consultar:
+                    texto = comentario_bot('contra', 'Tema', 'Pregunta', [], random.Random(42), persona=persona)
+                    self.assertTrue(texto)
+                    self.assertLessEqual(len(texto), 400)
+                    sistema = consultar.call_args.args[0]
+                    self.assertIn(persona['estilo'], sistema)
+                    for regla in ['bot declarado', 'contra', '300 caracteres', 'una o dos frases', 'una sola línea', 'sin comillas', 'sin insultos', 'enlaces ni teléfonos', 'no cambia tu postura']:
+                        self.assertIn(regla, sistema)
+                    self.assertEqual(consultar.call_count, 2 if respuesta == '' else 1)
+                    if respuesta == '':
+                        self.assertIn(texto, PLANTILLAS['contra'])
+
+    def test_sin_persona_conserva_prompt_y_resultado(self):
+        with patch('simulador.config.obtener', return_value='clave-simulada'), patch('simulador.ia._consultar', return_value='Una opinión breve.') as consultar:
+            a = comentario_bot('favor', 'Tema', 'Pregunta', [], random.Random(42))
+            primera = consultar.call_args
+            b = comentario_bot('favor', 'Tema', 'Pregunta', [], random.Random(42), persona=None)
+            self.assertEqual(a, b)
+            self.assertEqual(primera, consultar.call_args)
+            self.assertNotIn('Estilo de argumentación', primera.args[0])
+
+    def test_sin_clave_persona_no_cambia_plantilla(self):
+        with patch('simulador.config.obtener', return_value=''), patch('simulador.ia._consultar') as consultar:
+            for postura in PLANTILLAS:
+                a = comentario_bot(postura, 'Tema', 'Pregunta', [], random.Random(42))
+                for persona in self.personas:
+                    b = comentario_bot(postura, 'Tema', 'Pregunta', [], random.Random(42), persona=persona)
+                    self.assertEqual(a, b)
+            consultar.assert_not_called()
+
+    def bots(self, cantidad, semilla=42):
+        from .bots_comentarios import BotsComentarios
+        return BotsComentarios({'id': 1, 'tema': 'Tema', 'pregunta_postura': 'Pregunta'},
+                              {'id': 2, 'mezcla_bots': {'contra': cantidad}}, MagicMock(), azar=random.Random(semilla))
+
+    def test_asignacion_reproducible_repite_catalogo_sin_perder_variedad(self):
+        cantidad = len(self.personas) * 2 + 3
+        a, b = self.bots(cantidad), self.bots(cantidad)
+        for bots in [a, b]:
+            bots.asignar_personas()
+        self.assertEqual(a.personas_por_cupo, b.personas_por_cupo)
+        self.assertEqual(len(a.personas_por_cupo), cantidad)
+        etiquetas = [p['etiqueta'] for p in a.personas_por_cupo]
+        n = len(self.personas)
+        self.assertEqual(len(set(etiquetas[:n])), n)
+        self.assertEqual(etiquetas[:n], etiquetas[n:2*n])
+
+    def test_enter_y_cambiar_corrida_asignan_usando_semilla(self):
+        a, b = self.bots(4), self.bots(4)
+        with patch('simulador.bots_comentarios.sync_playwright'), patch('simulador.config.exigir', return_value='token'), patch('simulador.config.obtener', side_effect=lambda nombre, defecto='': defecto):
+            with a:
+                inicial = list(a.personas_por_cupo)
+                b.pagina = MagicMock()
+                b.destino = 'https://foro.example/h/1'
+                b.cambiar_corrida(b.corrida)
+                self.assertEqual(inicial, b.personas_por_cupo)
+                a.azar = random.Random(101)
+                nueva = {'id': 3, 'mezcla_bots': {'contra': 10}}
+                a.cambiar_corrida(nueva)
+                b.azar = random.Random(101)
+                b.cambiar_corrida(nueva)
+                self.assertEqual(a.personas_por_cupo, b.personas_por_cupo)
+                self.assertEqual(len(a.personas_por_cupo), 10)
+
+    def test_publicar_mantiene_personas_entre_rondas_y_nombre_visible(self):
+        bots = self.bots(4)
+        bots.asignar_personas()
+        asignacion = list(bots.personas_por_cupo)
+        bots.pagina = MagicMock()
+        campos = {}
+        bots.pagina.locator.side_effect = lambda selector: campos.setdefault(selector, MagicMock())
+        bots.cliente.comentarios.return_value = []
+        respuesta = bots.pagina.expect_response.return_value.__enter__.return_value.value
+        respuesta.status = 201
+        respuesta.json.return_value = {'es_bot': True, 'postura_bot': 'contra', 'corrida': 2}
+        with patch('simulador.bots_comentarios.comentario_bot', return_value='Opinión de bot.') as comentar, patch('simulador.bots_comentarios.time.sleep'), patch('simulador.config.obtener', side_effect=lambda nombre, defecto='': defecto):
+            bots.publicar_ronda()
+            bots.publicar_ronda()
+        self.assertEqual([llamada.kwargs['persona'] for llamada in comentar.call_args_list], asignacion * 2)
+        self.assertEqual(bots.personas_por_cupo, asignacion)
+        nombres = [llamada.args[0] for llamada in bots.pagina.locator('[name="autor_nombre"]').fill.call_args_list]
+        self.assertEqual(nombres, [bots.nombre_bot(p, n) for n, p in enumerate(asignacion, 1)] * 2)
+        for nombre, persona in zip(nombres, asignacion * 2):
+            self.assertTrue(nombre.startswith('Bot_'))
+            self.assertIn(persona['etiqueta'], nombre)
+            self.assertLessEqual(len(nombre), 30)
+
+    def test_nombre_no_supera_limite_incluso_con_etiqueta_editada(self):
+        from .bots_comentarios import BotsComentarios
+        for persona in [*self.personas, {'etiqueta': 'etiqueta-extremadamente-larga' * 3}]:
+            self.assertLessEqual(len(BotsComentarios.nombre_bot(persona, 150)), 30)
 
 
 if __name__ == '__main__':
