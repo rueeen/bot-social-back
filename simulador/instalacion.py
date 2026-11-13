@@ -122,7 +122,7 @@ def ejecutar(args, plazo):
             raise RuntimeError('El navegador volvió a fallar; se detiene la instalación') from error
         reapertura_usada = True
         cerrar_navegador()
-        consola.print('Reabriendo el navegador una única vez…')
+        consola.print('Reabriendo el navegador; hace falta una ronda exitosa para permitir otra recuperación…')
         abrir_navegador()
 
     try:
@@ -167,6 +167,7 @@ def ejecutar(args, plazo):
                         bots.publicar_ronda()
                     foto = avanzar_ronda(corrida['id'], cliente, azar_lectores)
                     resumen['completadas'] += 1
+                    reapertura_usada = False
                     consola.print(f'{corrida["etiqueta"]} · ronda {foto["ronda"]} · promedio {foto["promedio"]:.2f} · bots {foto["n_comentarios_bot"]}', markup=False)
                 except ErrorPlaywright as error:
                     resumen['fallidas'] += 1

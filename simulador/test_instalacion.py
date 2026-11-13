@@ -137,6 +137,34 @@ class PruebasInstalacion(unittest.TestCase):
         self.assertIn('volvió a fallar', resumen['motivo'])
         self.assertEqual(self.cliente.cerradas, [1])
 
+    def test_fallos_separados_por_exito_permiten_nuevas_reaperturas(self):
+        primero, segundo, tercero = MagicMock(), MagicMock(), MagicMock()
+        primero.publicar_ronda.side_effect = ErrorPlaywright('Primer hipo')
+        segundo.publicar_ronda.side_effect = [None, ErrorPlaywright('Segundo hipo')]
+        with patch.object(modulo, 'BotsComentarios') as clase, patch.object(modulo, 'avanzar_ronda', side_effect=self.avanzar):
+            clase.return_value.__enter__.side_effect = [primero, segundo, tercero]
+            resumen = modulo.ejecutar(self.args('--rondas-por-corrida', '5', '--tope-llamadas', '60', '--pausa', '0'), 120)
+        self.assertEqual(clase.call_count, 3)
+        self.assertEqual(resumen['rondas'], 5)
+        self.assertEqual(resumen['completadas'], 3)
+        self.assertEqual(resumen['fallidas'], 2)
+        self.assertNotIn('error que impide', resumen['motivo'])
+        self.assertEqual(self.cliente.cerradas, [1])
+        for navegador in [primero, segundo, tercero]:
+            navegador.__exit__.assert_called_once()
+
+    def test_reapertura_fallida_detiene_sin_intento_infinito(self):
+        primero = MagicMock()
+        primero.publicar_ronda.side_effect = ErrorPlaywright('Connection closed while reading from the driver')
+        with patch.object(modulo, 'BotsComentarios') as clase:
+            clase.return_value.__enter__.side_effect = [primero, ErrorPlaywright('Reapertura fallida')]
+            resumen = modulo.ejecutar(self.args('--pausa', '0'), 120)
+        self.assertEqual(clase.call_count, 2)
+        self.assertEqual(resumen['completadas'], 0)
+        self.assertIn('Reapertura fallida', resumen['motivo'])
+        self.assertEqual(self.cliente.cerradas, [1])
+        primero.__exit__.assert_called_once()
+
     def test_fallo_inicial_del_navegador_tambien_reabre(self):
         navegador = MagicMock()
         with patch.object(modulo, 'BotsComentarios') as clase, patch.object(modulo, 'avanzar_ronda', side_effect=self.avanzar):
@@ -194,6 +222,54 @@ class PruebasInstalacion(unittest.TestCase):
             modulo.ejecutar(args, 120)
         self.assertIn('USD 0.000800', self.salida.getvalue())
         self.assertNotIn('costo real de IA: USD 0', self.salida.getvalue())
+
+
+class PruebasCierreNavegador(unittest.TestCase):
+    def test_cierre_y_motor_no_propagan_errores_independientes(self):
+        for falla_cierre, falla_motor in [(True, False), (False, True), (True, True)]:
+            with self.subTest(cierre=falla_cierre, motor=falla_motor):
+                bots = BotsComentarios({'id': 1}, {'id': 2}, MagicMock())
+                bots.navegador, bots.motor = MagicMock(), MagicMock()
+                if falla_cierre:
+                    bots.navegador.close.side_effect = ErrorPlaywright('Navegador ya muerto')
+                if falla_motor:
+                    bots.motor.stop.side_effect = RuntimeError('Connection closed while reading from the driver')
+                with self.assertLogs('simulador.bots_comentarios', level='WARNING') as registro:
+                    self.assertIsNone(bots.__exit__(None, None, None))
+                bots.navegador.close.assert_called_once()
+                bots.motor.stop.assert_called_once()
+                self.assertEqual(len(registro.output), int(falla_cierre) + int(falla_motor))
+
+    def test_cierre_normal_no_suprime_error_del_cuerpo(self):
+        bots = BotsComentarios({'id': 1}, {'id': 2}, MagicMock())
+        bots.navegador, bots.motor = MagicMock(), MagicMock()
+        self.assertIsNone(bots.__exit__(ValueError, ValueError('Error de ronda'), None))
+        bots.navegador.close.assert_called_once()
+        bots.motor.stop.assert_called_once()
+
+
+class PruebasOrquestador(unittest.TestCase):
+    def test_error_en_publicacion_o_lectura_no_aborta_rondas_siguientes(self):
+        from . import orquestador
+        for origen in ['publicacion', 'lectura']:
+            with self.subTest(origen=origen):
+                cliente, navegador = MagicMock(), MagicMock()
+                cliente.get.return_value = {'id': 1, 'estado': 'abierto'}
+                cliente.post.side_effect = [{'id': 2}, [], {'promedio': 0}]
+                foto = {'ronda': 1, 'promedio': 0, 'n_comentarios_bot': 1}
+                fallo = ErrorPlaywright('Hipo puntual')
+                if origen == 'publicacion':
+                    navegador.publicar_ronda.side_effect = [fallo, None, None]
+                avances = [fallo, foto, foto] if origen == 'lectura' else [foto, foto]
+                argumentos = ['orquestador', '--hilo', '1', '--etiqueta', 'Prueba', '--mezcla', 'favor=1', '--rondas', '3', '--headless']
+                with patch.object(orquestador, 'Cliente', return_value=cliente), patch.object(orquestador, 'BotsComentarios') as clase, patch.object(orquestador, 'avanzar_ronda', side_effect=avances) as avanzar, patch.object(orquestador.config, 'exigir', return_value='token'), patch.object(orquestador, 'consola'), patch('sys.argv', argumentos), self.assertLogs('simulador.orquestador', level='WARNING') as registro:
+                    clase.return_value.__enter__.return_value = navegador
+                    orquestador.main()
+                self.assertEqual(navegador.publicar_ronda.call_count, 3)
+                self.assertEqual(avanzar.call_count, 3 if origen == 'lectura' else 2)
+                cliente.patch.assert_called_once_with('/panel/corridas/2/', {})
+                clase.return_value.__exit__.assert_called_once()
+                self.assertIn('Hipo puntual', registro.output[0])
 
 
 if __name__ == '__main__':
