@@ -3,3 +3,4 @@ playwright>=1.51,<2
 anthropic>=0.49,<3
 rich>=13.9,<16
 python-dotenv>=1.1,<2
+tzdata>=2025.1; sys_platform == "win32"

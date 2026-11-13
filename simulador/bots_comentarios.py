@@ -19,16 +19,25 @@ class BotsComentarios:
             self.navegador = self.motor.chromium.launch(headless=self.headless, executable_path=config.obtener('CHROMIUM_EXECUTABLE_PATH') or None)
             self.contexto = self.navegador.new_context()
             self.pagina = self.contexto.new_page()
-            self.destino = config.FRONT_URL + config.obtener('RUTA_HILO', '/hilos/{hilo}').format(hilo=self.hilo['id'])
+            self.destino = config.FRONT_URL + config.obtener('RUTA_HILO', '/h/{hilo}').format(hilo=self.hilo['id'])
             # El front lee estas claves y envía el token únicamente a su API configurada.
-            valores = {'bot_token': self.token, 'es_bot': 'true', 'corrida': str(self.corrida['id'])}
+            valores = {'bot_token': self.token, 'es_bot': 'true'}
             self.contexto.add_init_script('if (location.origin === ' + json.dumps(config.FRONT_URL) + ') {' +
-                ''.join('localStorage.setItem(' + json.dumps(k) + ',' + json.dumps(v) + ');' for k, v in valores.items()) + '}')
+                ''.join('localStorage.setItem(' + json.dumps(k) + ',' + json.dumps(v) + ');' for k, v in valores.items()) +
+                'if (localStorage.getItem("corrida") === null) localStorage.setItem("corrida",' + json.dumps(str(self.corrida['id'])) + ');}')
             self.pagina.goto(self.destino)
+            self.pagina.evaluate('(id) => localStorage.setItem("corrida", String(id))', self.corrida['id'])
             return self
-        except Exception:
+        except BaseException:
+            # También liberar Playwright si Ctrl-C llega durante el inicio.
             self.motor.stop()
             raise
+
+    def cambiar_corrida(self, corrida):
+        # El script de inicio no fija la corrida: no debe restaurar un ID antiguo al navegar.
+        self.corrida = corrida
+        self.pagina.evaluate('(id) => localStorage.setItem("corrida", String(id))', corrida['id'])
+        self.pagina.goto(self.destino)
 
     def publicar_ronda(self):
         previos = self.cliente.comentarios(self.hilo['id'], self.corrida['id'], 0)
@@ -53,5 +62,7 @@ class BotsComentarios:
                 time.sleep(self.azar.uniform(2, 5) if self.lento else self.azar.uniform(0.2, 0.7))
 
     def __exit__(self, *args):
-        self.navegador.close()
-        self.motor.stop()
+        try:
+            self.navegador.close()
+        finally:
+            self.motor.stop()
