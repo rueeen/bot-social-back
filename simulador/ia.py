@@ -54,7 +54,7 @@ def comentario_bot(postura, tema, pregunta, comentarios_previos, azar=None, pers
     datos = {'tema': tema, 'pregunta': pregunta, 'comentarios': comentarios_previos[-10:]}
     for _ in range(2):
         try:
-            texto = _limpiar_comentario(_consultar(sistema, datos, max_tokens=150))
+            texto = _limpiar_comentario(_consultar(sistema, datos, max_tokens=256))
         except Exception:
             registro.warning('La consulta del comentario falló; se usa una plantilla de respaldo.')
             return azar.choice(PLANTILLAS[postura])
@@ -94,8 +94,9 @@ def nueva_postura(agente, pregunta, comentarios_nuevos, azar=None):
         respuesta = _consultar(
             f'Eres un lector de un foro con este perfil: {agente["perfil"]}. Tu postura actual es {actual} '
             'en una escala -100 a +100. Lee estos comentarios y decide tu nueva postura. Puedes mantenerla. '
-            'Responde solo JSON con postura (número) y motivo_breve (texto).',
-            {'pregunta': pregunta, 'comentarios': comentarios_nuevos})
+            'Responde en una sola línea, solo el objeto JSON, sin cercos de código, '
+            'con las claves postura (número entre -100 y 100) y motivo_breve (texto de máximo 12 palabras).',
+            {'pregunta': pregunta, 'comentarios': comentarios_nuevos}, max_tokens=400)
         # raw_decode admite explicaciones y cercos alrededor, y respeta llaves dentro de cadenas.
         inicio = respuesta.find('{')
         if inicio < 0:

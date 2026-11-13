@@ -25,7 +25,7 @@ class PruebasIA(unittest.TestCase):
         with patch('simulador.ia._consultar', return_value='') as consultar:
             self.assertIn(self.comentar(), PLANTILLAS['favor'])
         self.assertEqual(consultar.call_count, 2)
-        self.assertEqual(consultar.call_args.kwargs['max_tokens'], 150)
+        self.assertEqual(consultar.call_args.kwargs['max_tokens'], 256)
 
     def test_segundo_intento_recupera_comentario(self):
         with patch('simulador.ia._consultar', side_effect=['   ', 'Un argumento breve.']) as consultar:
@@ -70,6 +70,29 @@ class PruebasIA(unittest.TestCase):
             resultado = self.actualizar()
         self.assertEqual(resultado['postura'], 16)
         self.assertEqual(resultado['motivo'], 'Revisé {evidencia}')
+
+    def test_json_completo_con_cercos_usa_ia_y_presupuesto_de_400(self):
+        respuesta = '```json\n{"postura": 80, "motivo_breve": "La evidencia aporta una perspectiva útil"}\n```'
+        with patch('simulador.ia._consultar', return_value=respuesta) as consultar, self.assertNoLogs('simulador.ia', level='WARNING'):
+            resultado = self.actualizar()
+        self.assertEqual(resultado['postura'], 10)
+        self.assertEqual(resultado['motivo'], 'La evidencia aporta una perspectiva útil')
+        self.assertNotIn('Respaldo', resultado['motivo'])
+        self.assertEqual(consultar.call_args.kwargs['max_tokens'], 400)
+        sistema = consultar.call_args.args[0]
+        for regla in ['una sola línea', 'solo el objeto JSON', 'sin cercos de código', 'número entre -100 y 100', 'máximo 12 palabras']:
+            self.assertIn(regla, sistema)
+
+    def test_json_truncado_conserva_respaldo_heuristico(self):
+        respuesta = '{"postura":80,"motivo_breve":"La evidencia presentada sugiere que'
+        with patch('simulador.config.obtener', return_value=''):
+            esperado = self.actualizar()['postura']
+        with patch('simulador.ia._consultar', return_value=respuesta), self.assertLogs('simulador.ia', level='WARNING'):
+            resultado = self.actualizar()
+        self.assertEqual(resultado['postura'], esperado)
+        self.assertTrue(math.isfinite(resultado['postura']))
+        self.assertTrue(-100 <= resultado['postura'] <= 100)
+        self.assertIn('Respaldo heurístico', resultado['motivo'])
 
     def test_postura_invalida_usa_misma_heuristica_sin_clave(self):
         respuestas = ['sin JSON', '{mal formado}', '{}', '{"motivo_breve":"Sin postura"}',
