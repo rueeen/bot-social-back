@@ -153,8 +153,8 @@ def ejecutar(args, plazo):
                     if bots is None:
                         abrir_navegador()
                     else:
-                        bots.cambiar_corrida(corrida)
                         bots.azar = random.Random(args.semilla + indice)
+                        bots.cambiar_corrida(corrida)
                 except ErrorPlaywright as error:
                     recuperar_navegador(error)
             for intento in range(1, args.rondas_por_corrida + 1):
