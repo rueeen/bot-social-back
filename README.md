@@ -155,7 +155,7 @@ Completa `API_URL` (con `/api`, sin slash final), `FRONT_URL` (origen del fronte
 
 Antes de ejecutar bots sobre el frontend React, implementa este contrato en `ecoforo-front`:
 
-- Ruta de hilo `/hilos/:id`; formulario con inputs `name="autor_nombre"`, `name="texto"` y botón `type="submit"`. Ajustables mediante `RUTA_HILO`, `SELECTOR_NOMBRE`, `SELECTOR_TEXTO`, `SELECTOR_ENVIAR` en el `.env` del simulador.
+- Ruta de hilo `/h/:id`; formulario con inputs `name="autor_nombre"`, `name="texto"` y botón `type="submit"`. Ajustables mediante `RUTA_HILO`, `SELECTOR_NOMBRE`, `SELECTOR_TEXTO`, `SELECTOR_ENVIAR` en el `.env` del simulador.
 - Al enviar el formulario, lee **en ese momento** las claves locales `bot_token`, `es_bot`, `postura_bot`, `corrida`. Si `es_bot === "true"`, envía `es_bot: true`, `postura_bot` y `corrida: Number(...)` y el header `X-Bot-Token` al backend configurado. No guardes ni empaquetes un token real dentro del código React ni en variables públicas de Netlify.
 - Muestra siempre el indicador **BOT** y la postura a partir de la respuesta validada del servidor. El navegador dedicado del presentador conserva el token en localStorage para esta demo; no debe compartirse con alumnos. Cierra el contexto al terminar (el simulador lo hace).
 - Los bots rellenan el formulario real y esperan su respuesta HTTP 201; verifican que la API confirmó bot, postura y corrida. No interceptan ni sustituyen la publicación con llamadas API ocultas.
@@ -193,9 +193,50 @@ Compara las curvas y el histograma, no solo el promedio: ¿un lado repetido domi
 Con los puertos 8000 y 5173 libres y Chromium disponible:
 
 ```bash
-.venv/bin/python scripts/prueba_integracion.py
+RUTA_HILO='/hilos/{hilo}' .venv/bin/python scripts/prueba_integracion.py
 ```
 
 La prueba levanta Django sin threads y un formulario temporal en servidores locales, ejecuta el orquestador real para cuatro escenarios de dos rondas y seis lectores, valida semillas, snapshots, etiquetas de bot y cierre, y elimina sus datos y procesos al terminar. Usa un presentador temporal con credenciales aleatorias que no imprime. No llama a Anthropic. El formulario temporal verifica el contrato de Playwright; no reemplaza la prueba de integración con el frontend React real.
 
 Validación realizada en este entorno: 21 tests de Django, migraciones, carga de palabras, archivos estáticos y los cuatro escenarios anteriores con Chromium del sistema. Los escenarios comenzaron en promedio -31,67; después de dos rondas, sin bots quedó en -31,67 y solo a favor llegó a -16,04. Estos resultados pertenecen a la heurística configurada. No se validó el despliegue de PythonAnywhere, el frontend separado ni un proveedor IA remoto.
+
+## Modo instalación
+
+Para dejar la demo funcionando durante una charla, `simulador.instalacion` encadena corridas cortas sobre el mismo hilo. Cada corrida tiene su propia etiqueta (`charla 1`, `charla 2`, …), semilla (`base + número de corrida`), población y snapshot inicial: el dashboard puede mostrar cada curva por separado y evitar que una población ya saturada se mantenga toda la mañana en un extremo.
+
+Prepara `simulador/.env` con las credenciales y `API_URL` del backend, apunta `FRONT_URL` al origen real de Netlify y usa **`RUTA_HILO=/h/{hilo}`** (la ruta real del frontend). Si ya tenías un `.env` con `/hilos/{hilo}`, corrígelo también. Instala Chromium una vez en el notebook:
+
+```bash
+python -m playwright install chromium
+python -m simulador.instalacion --hilo 1 \
+  --mezcla contra=3,favor=1,neutral=0 \
+  --poblacion 25 --media 0 --dispersion 30 \
+  --hasta 12:00 --rondas-por-corrida 15 --pausa 20 \
+  --tope-llamadas 4000 --etiqueta-base "charla" --semilla 100 --lento
+```
+
+Debes indicar exactamente una opción: `--hasta HH:MM` es una hora **de hoy en America/Santiago** y rechaza una hora ya pasada; `--duracion 120` significa 120 minutos desde el inicio, independientemente de la zona horaria del notebook. Para la prueba de dos minutos, con el frontend disponible y sin clave de Anthropic:
+
+```bash
+python -m simulador.instalacion --hilo 1 --duracion 2 \
+  --rondas-por-corrida 3 --poblacion 8 \
+  --mezcla contra=3,favor=1,neutral=0 --pausa 5 --headless
+```
+
+Por defecto el navegador es visible; `--lento` agrega pausas al escribir/publicar y `--headless` se reserva para pruebas. La instalación mantiene un único navegador y cambia el ID de corrida en localStorage antes de volver al hilo. Al alcanzar el número de rondas cierra la corrida y crea otra sin relanzar Chromium. No requiere cambios en Django ni en React; utiliza el contrato de bot ya documentado.
+
+`--pausa` indica segundos entre rondas, también al pasar a otra corrida. Se duerme en tramos de hasta dos segundos y se recorta la pausa a la hora de término. Las solicitudes y la publicación de una ronda son síncronas: una operación ya iniciada puede terminar después de la hora límite; no se inicia la siguiente ronda. Mantén el notebook **encendido, despierto y con conexión** durante toda la charla.
+
+Antes de cada ronda se reserva `población + suma(mezcla)` como aproximación conservadora de llamadas de IA, incluso si esa ronda falla o se usa heurística. Si no queda presupuesto para la ronda completa, termina y cierra la corrida **sin sobrepasar el contador**. Por ejemplo, con ocho lectores y cuatro bots, `--tope-llamadas 24` permite dos rondas. No es un contador de facturación: reintentos internos del SDK, tokens reales y fallos parciales pueden diferir. Para un límite monetario estricto configura también el presupuesto en el proveedor.
+
+Un error puntual de IA, moderación o red se registra como ronda fallida y se continúa con el intento siguiente, sin repetir automáticamente los comentarios que ya fueron publicados. Los lectores parcialmente actualizados conservan sus cursores para la próxima ronda. Ante una excepción de Playwright se intenta abrir nuevamente el navegador **una única vez en toda la instalación**; un nuevo fallo detiene el proceso. Si falla la preparación de una corrida o su cierre no puede confirmarse, se informa y se detiene para no acumular corridas abiertas. Ctrl-C intenta cerrar la corrida activa y siempre libera el navegador; si la API no responde, el resumen avisa que el cierre no quedó confirmado.
+
+El resumen muestra corridas creadas, rondas intentadas/completadas/fallidas, reserva aproximada de llamadas y costo estimado en USD. Usa las tarifas de referencia solicitadas para la demo Haiku 5.5: **0,10 USD por millón de tokens de entrada** y **0,50 USD por millón de salida**, suponiendo 500 tokens de entrada y 100 de salida por llamada; equivale a **0,0001 USD por llamada estimada**. Son supuestos de la demo, no una confirmación de precios ni de disponibilidad del modelo. **Sin `ANTHROPIC_API_KEY`, las llamadas reales de IA y el costo real de IA son cero**; el contador aproximado sigue funcionando como freno de duración/actividad.
+
+Pruebas locales del nuevo modo, sin red ni gasto:
+
+```bash
+python -m unittest simulador.test_instalacion -v
+```
+
+La prueba histórica `scripts/prueba_integracion.py` usa un formulario temporal en `/hilos/`; el prefijo `RUTA_HILO='/hilos/{hilo}'` mostrado en su comando mantiene esa prueba compatible. Para el frontend real y el nuevo modo se usa `/h/{hilo}`.
