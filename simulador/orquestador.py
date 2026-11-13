@@ -1,8 +1,10 @@
 import argparse
+import logging
 import random
 from rich.console import Console
 
 consola = Console()
+registro = logging.getLogger(__name__)
 from . import config
 from .argumentos import mezcla
 from .cliente import Cliente
@@ -42,11 +44,14 @@ def main():
     # Flujos aleatorios separados: las pausas y plantillas no alteran el ruido de lectores.
     azar_lectores = random.Random(args.semilla)
     def rondas(bots=None):
-        for _ in range(args.rondas):
-            if bots:
-                bots.publicar_ronda()
-            foto = avanzar_ronda(corrida['id'], cliente, azar_lectores)
-            consola.print(f'Ronda {foto["ronda"]}: promedio {foto["promedio"]:.2f}; bots {foto["n_comentarios_bot"]}')
+        for intento in range(1, args.rondas + 1):
+            try:
+                if bots:
+                    bots.publicar_ronda()
+                foto = avanzar_ronda(corrida['id'], cliente, azar_lectores)
+                consola.print(f'Ronda {foto["ronda"]}: promedio {foto["promedio"]:.2f}; bots {foto["n_comentarios_bot"]}')
+            except Exception as error:
+                registro.warning('Intento de ronda %s fallido: %s. Se continúa con el siguiente.', intento, error)
     if sum(args.mezcla.values()):
         with BotsComentarios(hilo, corrida, cliente, args.lento, args.headless, random.Random(args.semilla)) as bots:
             rondas(bots)

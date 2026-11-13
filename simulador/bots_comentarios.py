@@ -1,4 +1,5 @@
 import json
+import logging
 import random
 import time
 from urllib.parse import urlsplit
@@ -6,6 +7,8 @@ from playwright.sync_api import sync_playwright
 from . import config
 from .ia import comentario_bot
 from .personas import PERSONAS
+
+registro = logging.getLogger(__name__)
 
 class BotsComentarios:
     def __init__(self, hilo, corrida, cliente, lento=False, headless=False, azar=None):
@@ -79,5 +82,9 @@ class BotsComentarios:
     def __exit__(self, *args):
         try:
             self.navegador.close()
-        finally:
+        except Exception as error:
+            registro.warning('No se pudo cerrar el navegador: %s', error)
+        try:
             self.motor.stop()
+        except Exception as error:
+            registro.warning('No se pudo detener el motor de Playwright: %s', error)
